@@ -139,7 +139,7 @@ body {
   position: absolute;
   top: var(--switch-pad);
   bottom: var(--switch-pad);
-  left: var(--switch-pad);
+  inset-inline-start: var(--switch-pad);
   width: calc((100% - (var(--switch-pad) * 2) - var(--switch-gap)) / 2);
   border-radius: 999px;
   background: linear-gradient(100deg, var(--brand-rose), #d90032);
@@ -150,6 +150,10 @@ body {
 
 body[data-active-view="chat"] .view-switch-group::before {
   transform: translateX(calc(100% + var(--switch-gap)));
+}
+
+html[dir="rtl"] body[data-active-view="chat"] .view-switch-group::before {
+  transform: translateX(calc(-100% - var(--switch-gap)));
 }
 
 .view-switch-btn {
@@ -788,6 +792,11 @@ body[data-active-view="chat"] .view-switch-group::before {
   background: currentColor;
   vertical-align: -2px;
   animation: caret-blink 1s steps(1) infinite;
+}
+
+html[dir="rtl"] .chat-typing-cursor {
+  margin-inline-start: 0;
+  margin-inline-end: 2px;
 }
 
 .chat-bubble p {
