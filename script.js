@@ -9,6 +9,7 @@ const selectedProductsList = document.getElementById("selectedProductsList");
 const selectedCount = document.getElementById("selectedCount");
 const clearSelectedButton = document.getElementById("clearSelected");
 const generateRoutineButton = document.getElementById("generateRoutine");
+const webSearchToggle = document.getElementById("webSearchToggle");
 const viewProductsButton = document.getElementById("viewProductsBtn");
 const viewChatButton = document.getElementById("viewChatBtn");
 const resetButton = document.getElementById("resetButton");
@@ -26,8 +27,10 @@ const workerEndpoint = window.WORKER_ENDPOINT
 
 const SELECTED_PRODUCTS_STORAGE_KEY = "loreal-selected-product-ids";
 const CHAT_STATE_STORAGE_KEY = "loreal-chat-state";
+const WEB_SEARCH_STORAGE_KEY = "loreal-web-search-enabled";
 const DEFAULT_CHAT_MESSAGE = "Generate a routine to start the conversation.";
-const ENABLE_WEB_SEARCH = true;
+const WEB_SEARCH_PROMPT_SUFFIX =
+  " Use web search for current information when relevant and include source links for web-based claims.";
 const RTL_LANGUAGE_PREFIXES = ["ar", "fa", "he", "ur", "dv", "ps", "ku"];
 const MAX_PRODUCT_DESCRIPTION_CHARS = 320;
 const VIEW_PRODUCTS = "products";
@@ -51,6 +54,7 @@ const appState = {
   activeView: VIEW_PRODUCTS,
   nextMessageId: 1,
   typingTimerId: null,
+  webSearchEnabled: true,
 };
 
 productsContainer.innerHTML = `
@@ -176,6 +180,28 @@ function loadSelectedProductsFromStorage() {
   } catch (error) {
     console.error("Could not load saved product selections.", error);
     localStorage.removeItem(SELECTED_PRODUCTS_STORAGE_KEY);
+  }
+}
+
+function saveWebSearchPreference() {
+  localStorage.setItem(
+    WEB_SEARCH_STORAGE_KEY,
+    JSON.stringify(appState.webSearchEnabled),
+  );
+}
+
+function loadWebSearchPreference() {
+  const storedValue = localStorage.getItem(WEB_SEARCH_STORAGE_KEY);
+
+  if (!storedValue) {
+    return;
+  }
+
+  try {
+    appState.webSearchEnabled = Boolean(JSON.parse(storedValue));
+  } catch (error) {
+    console.error("Could not load web search preference.", error);
+    localStorage.removeItem(WEB_SEARCH_STORAGE_KEY);
   }
 }
 
@@ -442,6 +468,14 @@ function renderChatMessageContent(message) {
   return formatMessageContent(message.content);
 }
 
+function renderAssistantSources(message) {
+  if (message.role !== "assistant") {
+    return "";
+  }
+
+  return renderMessageCitations(message.citations);
+}
+
 function startTypingAnimation(messageId) {
   stopTypingAnimation();
 
@@ -484,10 +518,12 @@ function renderChatWindow() {
             <div class="chat-message ${message.role} ${
               message.isNew ? "is-new-message" : ""
             }">
-              <div class="chat-bubble">
-                ${renderChatMessageContent(message)}
+              <div class="chat-message-content">
+                <div class="chat-bubble">
+                  ${renderChatMessageContent(message)}
+                </div>
+                ${renderAssistantSources(message)}
               </div>
-              ${renderMessageCitations(message.citations)}
             </div>
           `,
         )
@@ -521,6 +557,9 @@ function setChatLoadingState(isLoading, loadingMessage = "") {
   appState.isLoading = isLoading;
   appState.loadingMessage = loadingMessage;
   generateRoutineButton.disabled = isLoading;
+  if (webSearchToggle) {
+    webSearchToggle.disabled = isLoading;
+  }
   userInput.disabled = isLoading;
   sendBtn.disabled = isLoading;
   resetButton.disabled = isLoading;
@@ -690,17 +729,22 @@ function registerDebugConsoleApi() {
   };
 }
 
-function buildSystemPrompt(selectedProducts) {
+function buildSystemPrompt(selectedProducts, webSearchEnabled) {
   const productSummary = selectedProducts
     .map(serializeProductForAi)
     .map((product) => JSON.stringify(product, null, 2))
     .join("\n");
+
+  const webSearchInstruction = webSearchEnabled
+    ? "Web search is enabled. Prefer up-to-date information when relevant and include source links for web-based claims."
+    : "Web search is disabled. Do not rely on new web lookups; answer from conversation context and selected products.";
 
   return [
     "You are a helpful L'Oréal routine advisor.",
     "Stay focused on the selected products, skincare, haircare, makeup, fragrance, and related beauty topics.",
     "If the user asks something unrelated, gently steer the conversation back to their routine.",
     "Use the selected product JSON below as the primary source of truth when recommending a routine.",
+    webSearchInstruction,
     "When appropriate, structure answers with clear steps and concise explanations.",
     "",
     "Selected products:",
@@ -708,13 +752,35 @@ function buildSystemPrompt(selectedProducts) {
   ].join("\n");
 }
 
+function buildUserPrompt(basePrompt) {
+  const cleanedPrompt = String(basePrompt || "").trim();
+
+  if (!appState.webSearchEnabled) {
+    return cleanedPrompt;
+  }
+
+  return `${cleanedPrompt}${WEB_SEARCH_PROMPT_SUFFIX}`;
+}
+
 function buildConversationMessages(userMessage, selectedProducts) {
+  const normalizedConversation = appState.conversationMessages
+    .filter(
+      (message) =>
+        message &&
+        (message.role === "user" || message.role === "assistant") &&
+        typeof message.content === "string",
+    )
+    .map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
+
   return [
     {
       role: "system",
-      content: buildSystemPrompt(selectedProducts),
+      content: buildSystemPrompt(selectedProducts, appState.webSearchEnabled),
     },
-    ...appState.conversationMessages,
+    ...normalizedConversation,
     {
       role: "user",
       content: userMessage,
@@ -758,12 +824,33 @@ async function requestWorkerResponse(userMessage, selectedProducts) {
     body: JSON.stringify({
       messages,
       products: selectedProducts.map(serializeProductForAi),
-      webSearch: ENABLE_WEB_SEARCH,
+      webSearch: appState.webSearchEnabled,
     }),
   });
 
   if (!response.ok) {
-    throw new Error(`Worker request failed with status ${response.status}.`);
+    let errorDetails = "";
+
+    try {
+      const errorPayload = await response.json();
+      errorDetails =
+        errorPayload?.error ||
+        errorPayload?.details?.error?.message ||
+        errorPayload?.details?.message ||
+        errorPayload?.message ||
+        JSON.stringify(errorPayload);
+    } catch {
+      try {
+        errorDetails = await response.text();
+      } catch {
+        errorDetails = "";
+      }
+    }
+
+    const suffix = errorDetails ? ` Details: ${errorDetails}` : "";
+    throw new Error(
+      `Worker request failed with status ${response.status}.${suffix}`,
+    );
   }
 
   const data = await response.json();
@@ -895,7 +982,9 @@ async function generateRoutine() {
     return;
   }
 
-  const userMessage = `Create a personalized skincare, haircare, or makeup routine using these selected products. Return a clear morning/evening or step-by-step routine and explain why each product belongs where it does.`;
+  const routineRequest =
+    "Create a personalized skincare, haircare, or makeup routine using these selected products. Return a clear morning/evening or step-by-step routine and explain why each product belongs where it does.";
+  const userMessage = buildUserPrompt(routineRequest);
 
   appState.conversationMessages = [];
   appState.routineContextProducts = selectedProducts;
@@ -923,10 +1012,13 @@ async function generateRoutine() {
     saveChatStateToStorage();
   } catch (error) {
     console.error("Could not generate routine.", error);
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : "Unknown error while generating routine.";
     appState.conversationMessages.push({
       role: "assistant",
-      content:
-        "I couldn't generate a routine right now. Please check your worker endpoint and try again.",
+      content: `I couldn't generate a routine right now. ${errorMessage}`,
     });
     saveChatStateToStorage();
     renderChatWindow();
@@ -950,9 +1042,10 @@ async function sendFollowUpMessage(userMessage) {
   setChatLoadingState(true, "Thinking about your follow-up...");
 
   try {
-    appendConversationMessage("user", userMessage);
+    const promptWithWebSearch = buildUserPrompt(userMessage);
+    appendConversationMessage("user", promptWithWebSearch);
     const assistantResponse = await requestWorkerResponse(
-      userMessage,
+      promptWithWebSearch,
       selectedProducts,
     );
     setChatLoadingState(false);
@@ -964,10 +1057,13 @@ async function sendFollowUpMessage(userMessage) {
     );
   } catch (error) {
     console.error("Could not send follow-up message.", error);
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : "Unknown error while sending follow-up.";
     appState.conversationMessages.push({
       role: "assistant",
-      content:
-        "I couldn't answer that right now. Please try again after checking the worker endpoint.",
+      content: `I couldn't answer that right now. ${errorMessage}`,
     });
     renderChatWindow();
   } finally {
@@ -1142,6 +1238,13 @@ clearSelectedButton.addEventListener("click", () => {
   renderApp();
 });
 
+if (webSearchToggle) {
+  webSearchToggle.addEventListener("change", (event) => {
+    appState.webSearchEnabled = event.target.checked;
+    saveWebSearchPreference();
+  });
+}
+
 generateRoutineButton.addEventListener("click", () => {
   generateRoutine();
 });
@@ -1209,6 +1312,10 @@ async function initializeApp() {
     applyDirectionFromBrowserLanguage();
     appState.allProducts = await loadProducts();
     loadSelectedProductsFromStorage();
+    loadWebSearchPreference();
+    if (webSearchToggle) {
+      webSearchToggle.checked = appState.webSearchEnabled;
+    }
     sanitizeSelectedIds();
     loadChatStateFromStorage();
     setActiveCategory("");

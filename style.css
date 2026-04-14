@@ -692,7 +692,7 @@ html[dir="rtl"] body[data-active-view="chat"] .view-switch-group::before {
 
 .generate-btn {
   width: 100%;
-  margin-top: 20px;
+  margin-top: 12px;
   padding: 15px;
   font-size: 1rem;
   font-weight: 700;
@@ -716,6 +716,27 @@ html[dir="rtl"] body[data-active-view="chat"] .view-switch-group::before {
 
 .generate-btn i {
   margin-inline-end: 8px;
+}
+
+.web-search-toggle {
+  margin-top: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink-700);
+}
+
+.web-search-toggle input {
+  accent-color: var(--brand-rose);
+  inline-size: 16px;
+  block-size: 16px;
+}
+
+.web-search-toggle input:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .chatbox {
@@ -756,6 +777,13 @@ html[dir="rtl"] body[data-active-view="chat"] .view-switch-group::before {
   will-change: transform, opacity;
 }
 
+.chat-message-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
 .chat-message.is-new-message {
   animation: message-rise 0.24s ease-out both;
 }
@@ -766,6 +794,10 @@ html[dir="rtl"] body[data-active-view="chat"] .view-switch-group::before {
 
 .chat-message.assistant {
   justify-content: flex-start;
+}
+
+.chat-message.user .chat-message-content {
+  align-items: flex-end;
 }
 
 .chat-bubble {
